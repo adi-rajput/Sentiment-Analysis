@@ -1,23 +1,50 @@
+# sentiment_benchmark.py
+
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TextClassificationPipeline
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.svm import LinearSVC
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TextClassificationPipeline
 from tqdm import tqdm
 import torch
 
-# Model configurations
-model_configs = {
+# ------------------------------------------------------------
+# Step 1: Configuration
+# ------------------------------------------------------------
+
+# Transformer-based model configs
+transformer_models = {
     "DistilBERT (SST-2)": "distilbert-base-uncased-finetuned-sst-2-english",
     "BERT (Multilingual - 5 Stars)": "nlptown/bert-base-multilingual-uncased-sentiment",
     "RoBERTa (Twitter)": "cardiffnlp/twitter-roberta-base-sentiment"
 }
 
-# Load dataset
-df = pd.read_csv("data.csv")
-texts = df['text'].tolist()
-true_labels = df['label'].tolist()  # 0 = Negative, 1 = Positive
+# Traditional ML models
+traditional_models = {
+    "Logistic Regression": LogisticRegression(max_iter=1000),
+    "Naive Bayes": MultinomialNB(),
+    "Linear SVC": LinearSVC()
+}
 
-# Normalize predictions for different label formats
+# ------------------------------------------------------------
+# Step 2: Load Dataset
+# ------------------------------------------------------------
+
+df = pd.read_csv("data.csv")  # Ensure 'text' and 'label' columns exist
+texts = df['text'].tolist()
+true_labels = df['label'].tolist()
+
+# ------------------------------------------------------------
+# Step 3: Helper Functions
+# ------------------------------------------------------------
+
 def normalize_prediction(model_name, result):
+    """
+    Normalize prediction label to binary:
+    1 -> Positive, 0 -> Negative
+    """
     label = result['label'].lower()
     if "sst-2" in model_name or "twitter" in model_name:
         return 1 if "pos" in label else 0
@@ -26,20 +53,43 @@ def normalize_prediction(model_name, result):
         return 1 if stars >= 4 else 0
     return 0
 
-# Store benchmark metrics
-benchmark_results = []
+def evaluate_model(name, y_true, y_pred):
+    """
+    Compute all metrics for a given model.
+    """
+    return {
+        "Model": name,
+        "Accuracy": round(accuracy_score(y_true, y_pred), 3),
+        "Precision": round(precision_score(y_true, y_pred), 3),
+        "Recall": round(recall_score(y_true, y_pred), 3),
+        "F1 Score": round(f1_score(y_true, y_pred), 3)
+    }
 
-# For storing model-wise predictions
+def print_prediction_output(text, pred, score):
+    """
+    Print individual prediction (optional, useful for debugging).
+    """
+    sentiment = "Positive" if pred == 1 else "Negative"
+    print(f"Text       : {text}")
+    print(f"Prediction : {sentiment} (Confidence: {score})\n")
+
+# ------------------------------------------------------------
+# Step 4: Run Transformer Benchmarks
+# ------------------------------------------------------------
+
+benchmark_results = []
 model_predictions = {}
 
-print("\n📊 Sentiment Predictions Per Model:\n")
+print("\n🔬 Running Transformer-based Sentiment Models\n")
 
-for model_desc, model_name in model_configs.items():
-    print(f"🔍 Model: {model_desc}\n{'-' * 50}")
+for model_desc, model_name in transformer_models.items():
+    print(f"🔍 Model: {model_desc}")
+    print("-" * 60)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
-    pipeline_model = TextClassificationPipeline(
+
+    pipe = TextClassificationPipeline(
         model=model,
         tokenizer=tokenizer,
         return_all_scores=False,
@@ -47,39 +97,51 @@ for model_desc, model_name in model_configs.items():
     )
 
     preds = []
-    per_text_output = []
-
-    for text in texts:
-        result = pipeline_model(text)[0]
+    for text in tqdm(texts, desc=f"Inference with {model_desc}"):
+        result = pipe(text)[0]
         pred = normalize_prediction(model_name, result)
-        label = "Positive" if pred == 1 else "Negative"
-        score = round(result['score'], 2)
         preds.append(pred)
-        per_text_output.append((text, label, score))
+        # Uncomment for sentence-wise results
+        # print_prediction_output(text, pred, round(result['score'], 2))
 
-    # Print individual sentence predictions
-    for text, label, score in per_text_output:
-        print(f"Text     : {text}")
-        print(f"Prediction: {label} (Confidence: {score})\n")
-
-    # Save predictions for benchmark
     model_predictions[model_desc] = preds
+    metrics = evaluate_model(model_desc, true_labels, preds)
+    benchmark_results.append(metrics)
 
-    # Evaluate metrics
-    acc = accuracy_score(true_labels, preds)
-    prec = precision_score(true_labels, preds)
-    rec = recall_score(true_labels, preds)
-    f1 = f1_score(true_labels, preds)
+# ------------------------------------------------------------
+# Step 5: Run Traditional ML Benchmarks
+# ------------------------------------------------------------
 
-    benchmark_results.append({
-        "Model": model_desc,
-        "Accuracy": round(acc, 2),
-        "Precision": round(prec, 2),
-        "Recall": round(rec, 2),
-        "F1 Score": round(f1, 2)
-    })
+print("\n🔬 Running Traditional ML Models\n")
 
-# Create formal benchmark summary
-print("\n📈 Model Benchmark Summary:\n")
-df_benchmark = pd.DataFrame(benchmark_results)
-print(df_benchmark.to_string(index=False))
+# Vectorize text
+vectorizer = TfidfVectorizer(max_features=5000)
+X = vectorizer.fit_transform(texts)
+y = true_labels
+
+for model_desc, clf in traditional_models.items():
+    print(f"🔍 Model: {model_desc}")
+    print("-" * 60)
+
+    clf.fit(X, y)
+    preds = clf.predict(X)
+
+    model_predictions[model_desc] = preds
+    metrics = evaluate_model(model_desc, y, preds)
+    benchmark_results.append(metrics)
+
+# ------------------------------------------------------------
+# Step 6: Display Benchmark Summary
+# ------------------------------------------------------------
+
+print("\n📊 Final Model Benchmark Summary\n")
+
+df_results = pd.DataFrame(benchmark_results)
+print(df_results.to_string(index=False))
+
+# ------------------------------------------------------------
+# Step 7: Recommend Best Model
+# ------------------------------------------------------------
+
+best_model = df_results.sort_values(by="F1 Score", ascending=False).iloc[0]
+print(f"\n🏆 Best Performing Model: {best_model['Model']} with F1 Score = {best_model['F1 Score']}")

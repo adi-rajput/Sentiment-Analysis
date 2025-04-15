@@ -1,5 +1,14 @@
+# Core libraries
+pandas
+tqdm
+
+# Sklearn for traditional ML
+scikit-learn
+
+# Transformers for HuggingFace models
 transformers
 torch
-pandas
-scikit-learn
-tqdm
+
+# Optional (for GPU acceleration - if using CUDA, ensure appropriate torch version)
+# torch==2.1.0+cu118    # for CUDA 11.8
+# torch==2.1.0+cpu      # for CPU only
